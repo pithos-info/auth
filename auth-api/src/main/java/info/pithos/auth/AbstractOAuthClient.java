@@ -15,12 +15,6 @@ public abstract class AbstractOAuthClient implements OAuthClient {
     }
 
     protected <T> CompletableFuture<T> submitAsync(Callable<T> task) {
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                return task.call();
-            } catch (Exception e) {
-                throw new RuntimeException(e);
-            }
-        }, context.getSystemContext().getForkJoinExecutor());
+        return context.getSystemContext().submitAsync(task);
     }
 }
