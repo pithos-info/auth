@@ -132,6 +132,7 @@ public class GcpIdentityOAuthClient extends AbstractOAuthClient {
             return new TokenIntrospection(
                 active,
                 json.path("sub").asText(null),
+                null,
                 json.path("azp").asText(null),
                 json.path("email").asText(null),
                 exp,

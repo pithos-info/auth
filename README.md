@@ -40,7 +40,7 @@ Model types (`info.pithos.auth.model`):
 | Type | Fields |
 |---|---|
 | `TokenResponse` | `accessToken`, `refreshToken`, `expiresIn`, `tokenType`, `scope` |
-| `TokenIntrospection` | `active`, `subject`, `clientId`, `username`, `expiresAt`, `issuedAt`, `scope`, `roles` |
+| `TokenIntrospection` | `active`, `subject`, `enterpriseId`, `clientId`, `username`, `expiresAt`, `issuedAt`, `scope`, `roles` |
 | `UserInfo` | `subject`, `name`, `email`, `preferredUsername`, `groups` |
 | `TokenType` | Enum: `ACCESS`, `REFRESH` |
 
@@ -50,6 +50,8 @@ Keycloak implementation of `OAuthClient`. Java package: `info.pithos.auth.keyclo
 Uses `keycloak-admin-client` (`KeycloakBuilder` + `TokenManager.grantToken()`) for client-credentials token acquisition and `quarkus-oidc-client` (`OidcConstants`) for standard OIDC endpoint paths. All other endpoints (`/token`, `/introspect`, `/userinfo`, `/revoke`) are called via Java's built-in `HttpClient` using the OIDC standard paths provided by `quarkus-oidc-client`.
 
 Config proto: `KeycloakOAuthConfigs` (`serverUrl`, `realm`, `clientId`, `clientSecret`, `timeoutMs`)
+
+`introspectToken` returns `null` for `enterpriseId` — OAuth tokens do not carry enterprise-scoped identity; `enterpriseId` is populated instead from the `X-Enterprise-Id` request header by the service container layer.
 
 `login` uses the Resource Owner Password Credentials grant (`grant_type=password`) against the Keycloak token endpoint. `refreshToken` calls the token endpoint directly with the provided refresh token. `revokeToken` accepts a `TokenType` hint (`ACCESS` or `REFRESH`) and posts to the revocation endpoint. `introspectToken` returns realm roles from `realm_access.roles`.
 

@@ -160,6 +160,7 @@ public class KeycloakOAuthClient extends AbstractOAuthClient {
             return new TokenIntrospection(
                 json.path(OidcConstants.INTROSPECTION_TOKEN_ACTIVE).asBoolean(false),
                 json.path(OidcConstants.INTROSPECTION_TOKEN_SUB).asText(null),
+                null,
                 json.path(OidcConstants.INTROSPECTION_TOKEN_CLIENT_ID).asText(null),
                 json.path(OidcConstants.INTROSPECTION_TOKEN_USERNAME).asText(null),
                 json.path(OidcConstants.INTROSPECTION_TOKEN_EXP).asLong(0),

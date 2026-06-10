@@ -5,6 +5,7 @@ import java.util.List;
 public record TokenIntrospection(
     boolean active,
     String subject,
+    String enterpriseId,
     String clientId,
     String username,
     long expiresAt,
