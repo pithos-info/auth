@@ -16,14 +16,22 @@ import info.pithos.runtime.core.context.ServiceException;
 import info.pithos.runtime.model.config.Config.GcpIdentityOAuthConfigs;
 import info.pithos.runtime.model.protocol.Context.RequestContext;
 
+import java.math.BigInteger;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.security.KeyFactory;
+import java.security.PublicKey;
+import java.security.Signature;
+import java.security.spec.RSAPublicKeySpec;
 import java.util.ArrayList;
+import java.util.Base64;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
@@ -32,10 +40,14 @@ public class GcpIdentityOAuthClient extends AbstractOAuthClient {
     private static final String TOKEN_INFO_URL = "https://www.googleapis.com/oauth2/v3/tokeninfo";
     private static final String USER_INFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo";
     private static final String REVOKE_URL = "https://oauth2.googleapis.com/revoke";
+    private static final String FIREBASE_JWKS_URL =
+        "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
+    private static final String FIREBASE_ISSUER_PREFIX = "https://securetoken.google.com/";
 
     private final GcpIdentityOAuthConfigs configs;
     private volatile GoogleCredentials credentials;
     private volatile HttpClient httpClient;
+    private volatile Map<String, PublicKey> firebasePublicKeys = Map.of();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public GcpIdentityOAuthClient(ApplicationContext context) {
@@ -71,6 +83,7 @@ public class GcpIdentityOAuthClient extends AbstractOAuthClient {
         return submitAsync(() -> {
             credentials = null;
             httpClient = null;
+            firebasePublicKeys = Map.of();
             return true;
         });
     }
@@ -85,6 +98,14 @@ public class GcpIdentityOAuthClient extends AbstractOAuthClient {
     @Override
     public CompletableFuture<TokenResponse> loginWithIdToken(RequestContext requestContext, String idToken) {
         return submitAsync(() -> {
+            JsonNode payload = decodeJwtPayload(idToken);
+            if (isFirebaseToken(payload)) {
+                payload = verifyFirebaseToken(idToken);
+                long exp = payload.path("exp").asLong(0);
+                long expiresIn = Math.max(0, exp - System.currentTimeMillis() / 1000);
+                return new TokenResponse(idToken, null, expiresIn, "Bearer", "");
+            }
+            // Google ID token path — validate via tokeninfo
             String url = TOKEN_INFO_URL + "?id_token=" + URLEncoder.encode(idToken, StandardCharsets.UTF_8);
             HttpResponse<String> response = send(HttpRequest.newBuilder()
                 .uri(URI.create(url))
@@ -140,26 +161,42 @@ public class GcpIdentityOAuthClient extends AbstractOAuthClient {
     @Override
     public CompletableFuture<TokenIntrospection> introspectToken(RequestContext requestContext, String token) {
         return submitAsync(() -> {
-            String url = TOKEN_INFO_URL + "?access_token=" + URLEncoder.encode(token, StandardCharsets.UTF_8);
+            JsonNode payload = decodeJwtPayload(token);
+            if (isFirebaseToken(payload)) {
+                payload = verifyFirebaseToken(token);
+                return new TokenIntrospection(
+                    true,
+                    payload.path("sub").asText(null),
+                    null,
+                    null,
+                    payload.path("email").asText(null),
+                    payload.path("exp").asLong(0),
+                    payload.path("iat").asLong(0),
+                    null,
+                    List.of()
+                );
+            }
+            // Google ID tokens (iss: accounts.google.com) use ?id_token=; service-account
+            // access tokens use ?access_token=.
+            String param = "https://accounts.google.com".equals(payload.path("iss").asText(""))
+                ? "id_token" : "access_token";
+            String url = TOKEN_INFO_URL + "?" + param + "=" + URLEncoder.encode(token, StandardCharsets.UTF_8);
             HttpResponse<String> response = send(HttpRequest.newBuilder()
                 .uri(URI.create(url))
                 .GET()
                 .build());
             JsonNode json = objectMapper.readTree(response.body());
             boolean active = !json.has("error");
-            long exp = json.path("exp").asLong(0);
-            long iat = json.path("iat").asLong(0);
-            List<String> roles = new ArrayList<>();
             return new TokenIntrospection(
                 active,
                 json.path("sub").asText(null),
                 null,
                 json.path("azp").asText(null),
                 json.path("email").asText(null),
-                exp,
-                iat,
+                json.path("exp").asLong(0),
+                json.path("iat").asLong(0),
                 json.path("scope").asText(null),
-                List.copyOf(roles)
+                List.of()
             );
         });
     }
@@ -188,7 +225,103 @@ public class GcpIdentityOAuthClient extends AbstractOAuthClient {
         });
     }
 
-    // --- Helpers ---
+    // --- Firebase helpers ---
+
+    private boolean isFirebaseToken(JsonNode payload) {
+        String iss = payload.path("iss").asText("");
+        return iss.startsWith(FIREBASE_ISSUER_PREFIX);
+    }
+
+    // Validates a Firebase ID token: verifies RS256 signature via JWKS then checks iss/aud/exp.
+    // Returns the decoded payload on success; throws UNAUTHORIZED on any failure.
+    private JsonNode verifyFirebaseToken(String idToken) throws Exception {
+        String projectId = configs.getProjectId();
+        if (projectId.isBlank()) {
+            throw new ServiceException(ErrorCode.BAD_REQUEST,
+                "firebaseProjectId must be configured to validate Firebase ID tokens");
+        }
+
+        String[] parts = idToken.split("\\.");
+        if (parts.length != 3) {
+            throw new ServiceException(ErrorCode.UNAUTHORIZED, "malformed Firebase ID token");
+        }
+
+        JsonNode header = objectMapper.readTree(Base64.getUrlDecoder().decode(padBase64(parts[0])));
+        JsonNode payload = objectMapper.readTree(Base64.getUrlDecoder().decode(padBase64(parts[1])));
+
+        String kid = header.path("kid").asText(null);
+        if (kid == null) {
+            throw new ServiceException(ErrorCode.UNAUTHORIZED, "Firebase token missing kid");
+        }
+
+        PublicKey publicKey = resolveFirebasePublicKey(kid);
+
+        byte[] signingInput = (parts[0] + "." + parts[1]).getBytes(StandardCharsets.UTF_8);
+        byte[] signature = Base64.getUrlDecoder().decode(padBase64(parts[2]));
+        Signature sig = Signature.getInstance("SHA256withRSA");
+        sig.initVerify(publicKey);
+        sig.update(signingInput);
+        if (!sig.verify(signature)) {
+            throw new ServiceException(ErrorCode.UNAUTHORIZED, "Firebase token signature invalid");
+        }
+
+        long now = System.currentTimeMillis() / 1000;
+        if (payload.path("exp").asLong(0) < now) {
+            throw new ServiceException(ErrorCode.UNAUTHORIZED, "Firebase token expired");
+        }
+        String expectedIss = FIREBASE_ISSUER_PREFIX + projectId;
+        if (!expectedIss.equals(payload.path("iss").asText(""))) {
+            throw new ServiceException(ErrorCode.UNAUTHORIZED, "Firebase token issuer mismatch");
+        }
+        if (!projectId.equals(payload.path("aud").asText(""))) {
+            throw new ServiceException(ErrorCode.UNAUTHORIZED, "Firebase token audience mismatch");
+        }
+
+        return payload;
+    }
+
+    private PublicKey resolveFirebasePublicKey(String kid) throws Exception {
+        PublicKey key = firebasePublicKeys.get(kid);
+        if (key != null) return key;
+        refreshFirebasePublicKeys();
+        key = firebasePublicKeys.get(kid);
+        if (key == null) {
+            throw new ServiceException(ErrorCode.UNAUTHORIZED, "unknown Firebase signing key: " + kid);
+        }
+        return key;
+    }
+
+    private void refreshFirebasePublicKeys() throws Exception {
+        HttpResponse<String> response = send(HttpRequest.newBuilder()
+            .uri(URI.create(FIREBASE_JWKS_URL))
+            .GET()
+            .build());
+        JsonNode json = objectMapper.readTree(response.body());
+        KeyFactory keyFactory = KeyFactory.getInstance("RSA");
+        Map<String, PublicKey> keys = new HashMap<>();
+        for (JsonNode jwk : json.path("keys")) {
+            BigInteger modulus = new BigInteger(1, Base64.getUrlDecoder().decode(padBase64(jwk.path("n").asText())));
+            BigInteger exponent = new BigInteger(1, Base64.getUrlDecoder().decode(padBase64(jwk.path("e").asText())));
+            keys.put(jwk.path("kid").asText(), keyFactory.generatePublic(new RSAPublicKeySpec(modulus, exponent)));
+        }
+        firebasePublicKeys = Map.copyOf(keys);
+    }
+
+    private static String padBase64(String s) {
+        return switch (s.length() % 4) {
+            case 2 -> s + "==";
+            case 3 -> s + "=";
+            default -> s;
+        };
+    }
+
+    private JsonNode decodeJwtPayload(String token) throws Exception {
+        String[] parts = token.split("\\.");
+        if (parts.length < 2) return objectMapper.createObjectNode();
+        return objectMapper.readTree(Base64.getUrlDecoder().decode(padBase64(parts[1])));
+    }
+
+    // --- GCP helpers ---
 
     private TokenResponse toTokenResponse(GoogleCredentials creds) {
         AccessToken token = creds.getAccessToken();

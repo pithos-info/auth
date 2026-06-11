@@ -58,9 +58,44 @@ Config proto: `KeycloakOAuthConfigs` (`serverUrl`, `realm`, `clientId`, `clientS
 ### auth-gcp
 GCP Identity implementation of `OAuthClient`. Java package: `info.pithos.auth.gcp`
 
-Uses `google-auth-library-oauth2-http` (`GoogleCredentials` / `ImpersonatedCredentials`) for token acquisition via Application Default Credentials. When `serviceAccountEmail` is set the client uses `ImpersonatedCredentials` to impersonate that service account; otherwise ADC scoped to `defaultScopes` is used directly.
+Supports three distinct identity flows, all sharing the same `GcpIdentityOAuthModule` / `GcpIdentityOAuthClient`:
 
-`login` delegates to `clientCredentialsGrant` — GCP Identity Platform does not support the Resource Owner Password Credentials grant. `loginWithIdToken` validates the supplied Google ID token via the `tokeninfo?id_token=` endpoint; if valid it returns the ID token itself as the `accessToken` (with the remaining TTL as `expiresIn`) and no refresh token — the client must re-authenticate with Google on expiry. An invalid or expired ID token throws `UNAUTHORIZED`. `refreshToken` forces a credential refresh and returns a new access token — GCP service accounts do not use long-lived refresh tokens. `introspectToken` calls the `tokeninfo` endpoint; `getUserInfo` calls the `userinfo` endpoint. Both use Java's built-in `HttpClient`.
+#### Flow 1 — GCP service account (M2M / headless)
+
+`clientCredentialsGrant` acquires a service-account access token via Application Default Credentials (`GoogleCredentials.getApplicationDefault()`). When `serviceAccountEmail` is set the client uses `ImpersonatedCredentials` to impersonate that account; otherwise ADC scoped to `defaultScopes` is used directly. `login` delegates to `clientCredentialsGrant` — GCP does not support the ROPC grant for service accounts. `refreshToken` forces a credential refresh; GCP service accounts do not use long-lived refresh tokens.
+
+#### Flow 2 — Google Identity (direct user login)
+
+`loginWithIdToken` accepts a Google-issued ID token (`iss: https://accounts.google.com`). Validates via `https://www.googleapis.com/oauth2/v3/tokeninfo?id_token=` — no additional config required. Returns the ID token itself as the `accessToken` with the remaining TTL as `expiresIn`; no refresh token is issued (the client re-authenticates with Google on expiry). `introspectToken` routes tokens with `iss: accounts.google.com` back through `tokeninfo?id_token=`.
+
+How to obtain a Google ID token:
+- Developer machine: `gcloud auth print-identity-token`
+- CI / service account: `gcloud auth print-identity-token --impersonate-service-account=<sa>@<project>.iam.gserviceaccount.com`
+- Browser / SPA: Google OAuth2 Playground (`developers.google.com/oauthplayground`) — select `openid email profile` scope
+
+#### Flow 3 — Firebase with Google Identity
+
+`loginWithIdToken` accepts a Firebase-issued ID token (`iss: https://securetoken.google.com/{projectId}`). Validates by:
+1. Fetching Firebase signing keys from `https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com` (keys are cached in memory; refreshed automatically when a new `kid` is encountered)
+2. Verifying the RS256 signature using Java's built-in `Signature` / `KeyFactory`
+3. Checking `iss` = `https://securetoken.google.com/{projectId}`, `aud` = `{projectId}`, and `exp`
+
+Returns the Firebase ID token as the `accessToken`; no refresh token. `introspectToken` routes Firebase tokens (`iss` starts with `securetoken.google.com/`) through the same JWKS verification path.
+
+`projectId` must be set in `GcpIdentityOAuthConfigs` and must match the Firebase / GCP project ID (they are the same value — Firebase projects are GCP projects). Any Google account is accepted without pre-registration; Firebase auto-provisions users on first sign-in.
+
+How to obtain a Firebase ID token:
+- Exchange a Google ID token via `POST https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp?key={firebaseApiKey}` with `providerId=google.com` and `returnSecureToken=true` (requires Google sign-in provider enabled in Firebase Auth)
+
+#### `introspectToken` routing summary
+
+| Token issuer (`iss`) | Validation path |
+|---|---|
+| `https://accounts.google.com` | `tokeninfo?id_token=` |
+| `https://securetoken.google.com/{projectId}` | Firebase JWKS (RS256 verify) |
+| other (GCP service-account access token) | `tokeninfo?access_token=` |
+
+`getUserInfo` calls the Google `userinfo` endpoint for all token types.
 
 Config proto: `GcpIdentityOAuthConfigs` (`projectId`, `serviceAccountEmail`, `defaultScopes`)
 
@@ -109,22 +144,32 @@ client.start(10, TimeUnit.SECONDS).join();
 
 // 4. Use the client
 
-// Service-to-service: client credentials
-TokenResponse token = client.clientCredentialsGrant(requestContext, List.of("openid")).join();
+// ── Flow 1: GCP service account (M2M) ────────────────────────────────────────
+// Uses ADC; serviceAccountEmail impersonation is optional via config.
+TokenResponse saToken = client.clientCredentialsGrant(requestContext, List.of()).join();
 
-// User login: Resource Owner Password Credentials grant (Keycloak only)
-TokenResponse userToken = client.login(requestContext, "alice", "secret").join();
-
-// User login: Google ID token (browser / SPA / mobile — client already has a Google id_token)
-// GCP: validates via tokeninfo, returns the id_token itself as accessToken (no refresh token)
-// Keycloak: exchanges via token-exchange grant, returns Keycloak access + refresh tokens
+// ── Flow 2: Google Identity — direct user login ───────────────────────────────
+// Client obtains a Google ID token (OAuth Playground / gcloud / Google Sign-In SDK).
+// GcpIdentityOAuthClient validates via tokeninfo; returns the id_token as accessToken.
+// KeycloakOAuthClient exchanges it for a Keycloak token pair via RFC 8693 token exchange.
 TokenResponse googleUserToken = client.loginWithIdToken(requestContext, googleIdToken).join();
 
+// ── Flow 3: Firebase with Google Identity ─────────────────────────────────────
+// Client exchanges a Google ID token for a Firebase ID token via signInWithIdp, then
+// passes the Firebase token here. GcpIdentityOAuthClient validates via Firebase JWKS
+// (RS256 signature + iss/aud/exp checks). Requires projectId in GcpIdentityOAuthConfigs.
+TokenResponse firebaseUserToken = client.loginWithIdToken(requestContext, firebaseIdToken).join();
+
+// ── Subsequent request validation (all flows) ─────────────────────────────────
 client.introspectToken(requestContext, googleUserToken.accessToken())
-      .thenAccept(info -> System.out.println("active: " + info.active()));
+      .thenAccept(info -> System.out.println("active: " + info.active() + ", sub: " + info.subject()));
 
 client.getUserInfo(requestContext, googleUserToken.accessToken())
-      .thenAccept(u -> System.out.println("user: " + u.email()));
+      .thenAccept(u -> System.out.println("email: " + u.email()));
+
+// ── Keycloak only ─────────────────────────────────────────────────────────────
+// Resource Owner Password Credentials grant (not supported by GCP).
+TokenResponse userToken = client.login(requestContext, "alice", "secret").join();
 
 // 5. Shut down gracefully
 client.shutdown(10, TimeUnit.SECONDS).join();
