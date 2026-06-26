@@ -10,10 +10,10 @@
     <packaging>pom</packaging>
 
     <modules>
-        <module>auth-model</module>
-        <module>auth-api</module>
-        <module>auth-keycloak</module>
-        <module>auth-gcp</module>
+        <module>authn-model</module>
+        <module>authn-api</module>
+        <module>authn-keycloak</module>
+        <module>authn-gcp</module>
     </modules>
 
     <properties>
