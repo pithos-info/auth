@@ -14,18 +14,18 @@
  * permissions and limitations under the License.
  */
 
-package info.pithos.auth.gcp;
+package info.pithos.authn.gcp;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.auth.oauth2.AccessToken;
 import com.google.auth.oauth2.GoogleCredentials;
 import com.google.auth.oauth2.ImpersonatedCredentials;
-import info.pithos.auth.AbstractOAuthClient;
-import info.pithos.auth.model.TokenIntrospection;
-import info.pithos.auth.model.TokenResponse;
-import info.pithos.auth.model.TokenType;
-import info.pithos.auth.model.UserInfo;
+import info.pithos.authn.AbstractOAuthClient;
+import info.pithos.authn.model.TokenIntrospection;
+import info.pithos.authn.model.TokenResponse;
+import info.pithos.authn.model.TokenType;
+import info.pithos.authn.model.UserInfo;
 import info.pithos.runtime.core.context.ApplicationContext;
 import info.pithos.runtime.core.context.ErrorCode;
 import info.pithos.runtime.core.context.ServiceException;

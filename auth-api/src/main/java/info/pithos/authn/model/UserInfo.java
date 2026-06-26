@@ -14,9 +14,14 @@
  * permissions and limitations under the License.
  */
 
-package info.pithos.auth.model;
+package info.pithos.authn.model;
 
-public enum TokenType {
-    ACCESS,
-    REFRESH
-}
+import java.util.List;
+
+public record UserInfo(
+    String subject,
+    String name,
+    String email,
+    String preferredUsername,
+    List<String> groups
+) {}

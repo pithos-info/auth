@@ -14,14 +14,18 @@
  * permissions and limitations under the License.
  */
 
-package info.pithos.auth.model;
+package info.pithos.authn.model;
 
 import java.util.List;
 
-public record UserInfo(
+public record TokenIntrospection(
+    boolean active,
     String subject,
-    String name,
-    String email,
-    String preferredUsername,
-    List<String> groups
+    String enterpriseId,
+    String clientId,
+    String username,
+    long expiresAt,
+    long issuedAt,
+    String scope,
+    List<String> roles
 ) {}

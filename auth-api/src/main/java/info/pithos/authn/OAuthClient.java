@@ -14,12 +14,12 @@
  * permissions and limitations under the License.
  */
 
-package info.pithos.auth;
+package info.pithos.authn;
 
-import info.pithos.auth.model.TokenIntrospection;
-import info.pithos.auth.model.TokenResponse;
-import info.pithos.auth.model.TokenType;
-import info.pithos.auth.model.UserInfo;
+import info.pithos.authn.model.TokenIntrospection;
+import info.pithos.authn.model.TokenResponse;
+import info.pithos.authn.model.TokenType;
+import info.pithos.authn.model.UserInfo;
 import info.pithos.runtime.core.context.ServiceLifeCycle;
 import info.pithos.runtime.model.protocol.Context.RequestContext;
 

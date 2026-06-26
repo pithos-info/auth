@@ -14,18 +14,12 @@
  * permissions and limitations under the License.
  */
 
-package info.pithos.auth.model;
+package info.pithos.authn.model;
 
-import java.util.List;
-
-public record TokenIntrospection(
-    boolean active,
-    String subject,
-    String enterpriseId,
-    String clientId,
-    String username,
-    long expiresAt,
-    long issuedAt,
-    String scope,
-    List<String> roles
+public record TokenResponse(
+    String accessToken,
+    String refreshToken,
+    long expiresIn,
+    String tokenType,
+    String scope
 ) {}

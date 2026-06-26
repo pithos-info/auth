@@ -16,7 +16,7 @@
 
 syntax = "proto3";
 
-package info.pithos.auth.model;
+package info.pithos.authn.model;
 
 message LoginRequest {
   string username = 1;

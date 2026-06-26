@@ -14,12 +14,9 @@
  * permissions and limitations under the License.
  */
 
-package info.pithos.auth.model;
+package info.pithos.authn.model;
 
-public record TokenResponse(
-    String accessToken,
-    String refreshToken,
-    long expiresIn,
-    String tokenType,
-    String scope
-) {}
+public enum TokenType {
+    ACCESS,
+    REFRESH
+}

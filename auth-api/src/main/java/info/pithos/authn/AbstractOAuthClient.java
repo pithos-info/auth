@@ -14,7 +14,7 @@
  * permissions and limitations under the License.
  */
 
-package info.pithos.auth;
+package info.pithos.authn;
 
 import info.pithos.runtime.core.context.ApplicationContext;
 

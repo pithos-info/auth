@@ -14,27 +14,27 @@
  * permissions and limitations under the License.
  */
 
-package info.pithos.auth.keycloak;
+package info.pithos.authn.gcp;
 
-import info.pithos.auth.OAuthClient;
+import info.pithos.authn.OAuthClient;
 import info.pithos.runtime.core.context.ApplicationContext;
 import info.pithos.runtime.core.context.ServiceModule;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
-public final class KeycloakOAuthModule extends ServiceModule {
+public final class GcpIdentityOAuthModule extends ServiceModule {
 
-    private KeycloakOAuthClient client;
+    private GcpIdentityOAuthClient client;
 
-    public KeycloakOAuthModule(ApplicationContext context) {
+    public GcpIdentityOAuthModule(ApplicationContext context) {
         super(context);
     }
 
     @Override
     public boolean init() {
         if (this.initialized.compareAndSet(false, true)) {
-            this.client = new KeycloakOAuthClient(this.getApplicationContext());
+            this.client = new GcpIdentityOAuthClient(this.getApplicationContext());
         }
         return this.initialized.get();
     }
@@ -43,7 +43,7 @@ public final class KeycloakOAuthModule extends ServiceModule {
     protected void configure() {
         super.configure();
         super.bind(OAuthClient.class).toInstance(this.client);
-        super.bind(KeycloakOAuthClient.class).toInstance(this.client);
+        super.bind(GcpIdentityOAuthClient.class).toInstance(this.client);
     }
 
     @Override
